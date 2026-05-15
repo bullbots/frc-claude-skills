@@ -13,8 +13,10 @@ Identify what you're working with before diving in:
 
 - **Language/framework**: Java command-based (most common), C++ WPILib, or Python RobotPy?
 - **Vendor libraries in use**: CTRE Phoenix 5 or 6? REV SparkMAX/SparkFlex? navX? Limelight?
+- **Drive type**: swerve (YAGSL, SwerveLib, custom) or differential (tank/arcade)? Check imports and subsystem class names.
 - **Relevant entry points**: `Robot.java` / `RobotContainer.java` for command-based; `robot.py` for RobotPy
 - **Build file**: `build.gradle` or `build.gradle.kts` — check WPILib and vendor dep versions
+- **Deploy directory**: `src/main/deploy/` — look for `swerve/` JSON configs (YAGSL), PathPlanner paths, Choreo trajectories
 
 Use Glob to find all source files (`**/*.java`, `**/*.cpp`, `**/*.h`, `**/*.py`). Read the most important ones (RobotContainer, subsystems, commands, Robot.java) carefully. Skim supporting files quickly.
 
@@ -27,6 +29,30 @@ Work through each category. For every issue you find, record:
 - A concrete fix
 
 Only flag things you actually found. Do not speculate about code you haven't read.
+
+---
+
+### SWERVE-SPECIFIC checks (skip if differential drive)
+
+If the codebase uses swerve (YAGSL, SwerveLib, or custom), run these in addition to the general checks below.
+
+**YAGSL configuration**
+- `src/main/deploy/swerve/` directory missing or empty — YAGSL reads JSON configs at runtime; if they're absent the robot won't initialize
+- Module JSON files (`frontleft.json`, `frontright.json`, etc.) have mismatched CAN IDs or wrong motor/encoder types — this is the #1 source of a swerve module spinning wrong or not at all
+- Absolute encoder offsets not set (all zeros) — wheels won't home to straight, robot will crab immediately on enable
+- Drive/steer motor inversion wrong for module position — check each module's physical wiring against its JSON config
+
+**Swerve drive code**
+- `driveFieldOriented()` vs `drive()` confusion — field-relative requires the gyro heading; robot-relative does not. Using the wrong one causes the robot to drive relative to its own facing instead of the field
+- Gyro not zeroed at the start of autonomous when field-relative driving is used — robot will drive in the wrong direction every auto run
+- Deadband missing on all three swerve axes independently: translation X, translation Y, and rotation — even a small resting joystick value causes continuous wheel steering adjustments and motor heat
+- `SwerveDriveKinematics` module positions don't match the physical robot layout — causes odometry drift and incorrect autonomous paths
+- No X-lock (wheels pointed inward) when stopped defensively — robot gets pushed easily
+
+**PathPlanner + swerve**
+- `AutoBuilder.configureHolonomic()` not called, or called with wrong parameters — swerve autos require holonomic path follower, not the differential `configureRamsete()`
+- Translation and rotation PID constants in `AutoBuilder.configureHolonomic()` are all zero — robot will not follow paths accurately
+- Robot width/length used in `SwerveDriveKinematics` is wrong (measured to wheel center, not bumper edge) — path following will overshoot
 
 ---
 
@@ -75,7 +101,7 @@ Only flag things you actually found. Do not speculate about code you haven't rea
 **Joystick / driver controls**
 - No deadband on any joystick axis used for drive — even a resting stick sends ~0.02–0.05, causing constant creep and motor heat
 - `getX()` / `getY()` axis directions not verified against WPILib coordinate convention (Y is inverted on most controllers)
-- Same button/trigger bound to two different commands in RobotContainer — second binding silently wins
+- **Duplicate button bindings**: the same button or trigger bound to two different commands/command groups in RobotContainer. WPILib does not warn you — the second `.onTrue()` / `.whileTrue()` call silently overwrites the first, so one command will never trigger. Scan every `JoystickButton`, `Trigger`, and controller shorthand (`.a()`, `.b()`, etc.) and verify each port+button combination appears only once. This is a competition killer because it only shows up when the operator presses the button and nothing happens.
 
 **Subsystem design**
 - Heavy computation (path generation, vision processing, inverse kinematics) inside `periodic()` rather than offloaded to a command or background thread
